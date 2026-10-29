@@ -22,7 +22,13 @@ from app.config import AppConfig
 from app.core.events import EventBus
 from app.core.models import Task, TaskStatus
 from app.jitsi.browser import JitsiBrowser
-from app.jitsi.join import JoinError, detect_meeting_ended, join_meeting, safe_url
+from app.jitsi.join import (
+    JoinError,
+    detect_meeting_ended,
+    join_meeting,
+    room_from_url,
+    safe_url,
+)
 from app.storage.db import TaskRepository
 from app.storage.files import build_folder_name, has_enough_space
 
@@ -87,7 +93,9 @@ class Orchestrator:
                 task = Task(
                     url=url,
                     name=name.strip(),
-                    bot_name=bot_name.strip() or self.cfg.default_bot_name,
+                    bot_name=self._normalize_bot_name(
+                        bot_name.strip() or self.cfg.default_bot_name
+                    ),
                     max_duration_min=max_duration_min,
                     start_at=start_at,
                 )
@@ -149,6 +157,16 @@ class Orchestrator:
         if task is None:
             raise StartRejectionError("Задание не найдено.")
         return task
+
+    @staticmethod
+    def _normalize_bot_name(name: str) -> str:
+        """Имя обязательно; в конце всегда присутствует « AI»."""
+        name = (name or "").strip()
+        if not name:
+            raise StartRejectionError("Укажите имя бота.")
+        if name.split()[-1].lower() != "ai":
+            name = f"{name} AI"
+        return name
 
     @staticmethod
     def _validate_url(url: str) -> str:

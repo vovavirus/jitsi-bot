@@ -31,7 +31,8 @@ class AppConfig:
     min_free_space_gb: float = 2.0
     connect_timeout_s: int = 120
     default_max_duration_min: int = 180
-    default_bot_name: str = "Владимир Русин AI"
+    # Задаётся при установке (make setup); в конце всегда добавляется « AI».
+    default_bot_name: str = ""
     display: str = ":99"
     pulse_sink: str = "botsink"
     pulse_socket: str = "/run/pulse/native"

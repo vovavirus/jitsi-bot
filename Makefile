@@ -3,12 +3,16 @@
 
 COMPOSE := docker compose -f docker/docker-compose.yml
 
-.PHONY: build up down restart logs ps clean
+.PHONY: setup build up down restart logs ps clean
+
+setup: ## Первичная установка: задать имя бота, создать config.yaml
+	./scripts/setup.sh
 
 build: ## Собрать образ
 	$(COMPOSE) build
 
 up: ## Запустить контейнер в фоне
+	@test -f config.yaml || { echo "Не найден config.yaml — сначала выполните 'make setup' (запросит имя бота)."; exit 1; }
 	$(COMPOSE) up -d
 
 down: ## Остановить и удалить контейнер

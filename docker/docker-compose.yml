@@ -11,8 +11,8 @@ services:
     volumes:
       # Записи сохраняются в ./recordings на хосте (macOS).
       - ../recordings:/app/recordings
-      # Конфигурация: создайте config.yaml в корне проекта и снимите закомментировать.
-      # - ../config.yaml:/app/config.yaml:ro
+      # Конфигурация создаётся при установке: make setup (обязательно).
+      - ../config.yaml:/app/config.yaml:ro
     environment:
       PULSE_SOCKET: /run/pulse/native
       PULSE_SINK: botsink
