@@ -1,0 +1,24 @@
+services:
+  bot:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: jitsi-recording-bot:latest
+    container_name: jitsi-recording-bot
+    ports:
+      # Панель доступна только локально на macOS-хосте.
+      - "127.0.0.1:8080:8080"
+    volumes:
+      # Записи сохраняются в ./recordings на хосте (macOS).
+      - ../recordings:/app/recordings
+      # Конфигурация: создайте config.yaml в корне проекта и снимите закомментировать.
+      # - ../config.yaml:/app/config.yaml:ro
+    environment:
+      PULSE_SOCKET: /run/pulse/native
+      PULSE_SINK: botsink
+      DISPLAY: ":99"
+      PORT: "8080"
+      LOG_LEVEL: INFO
+    restart: unless-stopped
+    # Захват всего экрана и PulseAudio работают внутри контейнера,
+    # дополнительного доступа к macOS не требуется.

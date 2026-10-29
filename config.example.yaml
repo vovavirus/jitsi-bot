@@ -1,0 +1,44 @@
+# Пример конфигурации бота для записи встреч Jitsi.
+# Скопируйте в config.yaml и при необходимости измените.
+# Большинство значений можно переопределить переменными окружения (см. app/config.py).
+
+# Сетевой адрес, на котором слушает веб-панель ВНУТРИ контейнера.
+# На хосте (macOS) пробрасывается только на 127.0.0.1:8080 через docker-compose.
+host: "0.0.0.0"
+port: 8080
+
+# Каталог хранения записей ВНУТРИ контейнера.
+# В docker-compose пробрасывается в ./recordings на macOS.
+storage_dir: "/app/recordings"
+
+# Минимальное свободное место (ГБ). При его нехватке запись не стартует / останавливается.
+min_free_space_gb: 2.0
+
+# Тайм-аут подключения к встрече (секунды).
+connect_timeout_s: 120
+
+# Значения по умолчанию для формы запуска.
+default_max_duration_min: 180
+default_bot_name: "Владимир Русин AI"
+
+# Виртуальный экран Xvfb (используется для захвата видео).
+display: ":99"
+
+# Имя виртуального аудио-sink PulseAudio, куда направляется звук браузера.
+pulse_sink: "botsink"
+
+# Сокет PulseAudio (совпадает с entrypoint.sh).
+pulse_socket: "/run/pulse/native"
+
+video:
+  width: 1920
+  height: 1080
+  fps: 25
+
+audio:
+  codec: "aac"
+  bitrate: "128k"
+  sample_rate: 48000
+
+# Уровень логирования (DEBUG / INFO / WARNING / ERROR).
+log_level: "INFO"

@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Запись встреч Jitsi</title>
+  <style>
+    :root {
+      --bg: #0f1115; --panel: #181c24; --panel2: #1f2530;
+      --text: #e8ecf3; --muted: #9aa4b2; --line: #2a3140;
+      --accent: #3b82f6; --ok: #22c55e; --warn: #f59e0b; --err: #ef4444;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--text);
+      font: 15px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    .wrap { max-width: 960px; margin: 0 auto; padding: 28px 20px 80px; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    .sub { color: var(--muted); margin: 0 0 24px; }
+    .card {
+      background: var(--panel); border: 1px solid var(--line);
+      border-radius: 12px; padding: 20px; margin-bottom: 20px;
+    }
+    .card h2 { font-size: 16px; margin: 0 0 16px; color: var(--text); }
+    label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 6px; }
+    input {
+      width: 100%; padding: 10px 12px; border-radius: 8px;
+      border: 1px solid var(--line); background: var(--panel2); color: var(--text);
+      font-size: 14px;
+    }
+    input:focus { outline: none; border-color: var(--accent); }
+    .row { display: flex; gap: 16px; flex-wrap: wrap; }
+    .row > div { flex: 1; min-width: 200px; }
+    .btn {
+      display: inline-block; cursor: pointer; border: none; border-radius: 8px;
+      padding: 11px 18px; font-size: 14px; font-weight: 600; color: #fff;
+      background: var(--accent);
+    }
+    .btn.secondary { background: var(--panel2); color: var(--text); border: 1px solid var(--line); }
+    .btn.danger { background: var(--err); }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .actions { margin-top: 18px; display: flex; gap: 12px; flex-wrap: wrap; }
+    .pill {
+      display: inline-block; padding: 3px 10px; border-radius: 999px;
+      font-size: 12px; font-weight: 600;
+    }
+    .pill.recording { background: rgba(34,197,94,.15); color: var(--ok); }
+    .pill.connecting, .pill.created, .pill.finalizing { background: rgba(245,158,11,.15); color: var(--warn); }
+    .pill.completed { background: rgba(34,197,94,.15); color: var(--ok); }
+    .pill.failed, .pill.interrupted { background: rgba(239,68,68,.15); color: var(--err); }
+    .pill.cancelled { background: var(--panel2); color: var(--muted); }
+    .kv { display: grid; grid-template-columns: 180px 1fr; gap: 6px 12px; font-size: 14px; }
+    .kv .k { color: var(--muted); }
+    .note { font-size: 13px; color: var(--muted); margin-top: 14px; }
+    .error { color: var(--err); font-size: 14px; margin-top: 10px; }
+    .warn { color: var(--warn); font-size: 13px; margin-top: 8px; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); }
+    th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+    a.dl { color: var(--accent); text-decoration: none; font-weight: 600; }
+    a.dl:hover { text-decoration: underline; }
+    .muted { color: var(--muted); }
+    .hidden { display: none; }
+    .conn { font-size: 12px; color: var(--muted); }
+    .conn .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--muted); margin-right:5px; }
+    .conn.on .dot { background: var(--ok); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Запись встреч Jitsi</h1>
+    <p class="sub">
+      Локальная панель управления &middot;
+      <span class="conn" id="conn"><span class="dot"></span>подключение…</span>
+    </p>
+
+    <!-- Форма запуска -->
+    <div class="card" id="startCard">
+      <h2>Новая запись</h2>
+      <label for="url">Ссылка на встречу Jitsi</label>
+      <input id="url" type="url" placeholder="https://meet.it-expertise.ru/название-комнаты" />
+      <div class="row">
+        <div>
+          <label for="name">Название записи (необязательно)</label>
+          <input id="name" type="text" placeholder="из комнаты и даты" />
+        </div>
+        <div>
+          <label for="botName">Имя бота</label>
+          <input id="botName" type="text" />
+        </div>
+      </div>
+      <label for="maxDur">Максимальная длительность (минут)</label>
+      <input id="maxDur" type="number" min="1" max="1440" />
+      <div class="actions">
+        <button class="btn" id="startBtn">Подключиться и записывать</button>
+      </div>
+      <div class="note" id="formNote"></div>
+      <div class="error" id="startError"></div>
+    </div>
+
+    <!-- Активная запись -->
+    <div class="card hidden" id="activeCard">
+      <h2>Активная запись</h2>
+      <div class="kv" id="activeKv"></div>
+      <div class="warn" id="activeWarn"></div>
+      <div class="error" id="activeError"></div>
+      <div class="actions" id="activeActions"></div>
+    </div>
+
+    <!-- История -->
+    <div class="card">
+      <h2>История записей</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Название</th><th>Дата</th><th>Статус</th>
+            <th>Длительность</th><th>Размер</th><th>Результат</th>
+          </tr>
+        </thead>
+        <tbody id="historyBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    const STATUS = {
+      created: "Создано", connecting: "Подключение", recording: "Запись идёт",
+      finalizing: "Финализация", completed: "Выполнено", failed: "Ошибка",
+      cancelled: "Отменено", interrupted: "Прервано"
+    };
+    const ACTIVE = new Set(["created", "connecting", "recording", "finalizing"]);
+    const tasks = {};
+    let activeId = null;
+
+    const $ = (id) => document.getElementById(id);
+
+    function fmtBytes(n) {
+      if (n == null) return "—";
+      const u = ["Б","КБ","МБ","ГБ","ТБ"]; let i = 0; let v = Number(n);
+      while (v >= 1024 && i < u.length-1) { v /= 1024; i++; }
+      return v.toFixed(v < 10 && i > 0 ? 1 : 0) + " " + u[i];
+    }
+    function fmtDur(s) {
+      if (s == null) return "—";
+      s = Math.floor(s);
+      const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = s%60;
+      const p = (x) => String(x).padStart(2, "0");
+      return (h ? h + ":" : "") + p(m) + ":" + p(sec);
+    }
+    function fmtTs(t) {
+      if (t == null) return "—";
+      return new Date(t * 1000).toLocaleString("ru-RU");
+    }
+    function esc(s) {
+      return String(s == null ? "" : s).replace(/[&<>"]/g,
+        (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+    }
+
+    async function loadDefaults() {
+      try {
+        const r = await fetch("/api/defaults"); const d = await r.json();
+        $("botName").value = d.default_bot_name;
+        $("maxDur").value = d.default_max_duration_min;
+      } catch (e) {}
+    }
+    async function loadTasks() {
+      try {
+        const r = await fetch("/api/tasks"); const list = await r.json();
+        list.forEach((t) => { tasks[t.id] = t; });
+        render();
+      } catch (e) {}
+    }
+
+    function render() {
+      // Найти активное задание.
+      activeId = null;
+      for (const id in tasks) if (ACTIVE.has(tasks[id].status)) { activeId = id; break; }
+
+      const startCard = $("startCard");
+      const activeCard = $("activeCard");
+
+      if (activeId) {
+        startCard.classList.add("hidden");
+        activeCard.classList.remove("hidden");
+        renderActive(tasks[activeId]);
+      } else {
+        startCard.classList.remove("hidden");
+        activeCard.classList.add("hidden");
+        $("formNote").textContent = "Одновременно поддерживается одна запись.";
+        $("startError").textContent = "";
+      }
+      renderHistory();
+    }
+
+    function renderActive(t) {
+      const rows = [
+        ["Название", esc(t.name)],
+        ["Встреча", esc(t.url)],
+        ["Состояние", `<span class="pill ${t.status}">${STATUS[t.status]}</span>`],
+        ["Имя бота", esc(t.bot_name)],
+        ["Начало", fmtTs(t.started_at)],
+        ["Длительность", fmtDur(t.live_duration_s != null ? t.live_duration_s : t.duration_s)],
+        ["Размер файла", fmtBytes(t.live_size)],
+      ];
+      $("activeKv").innerHTML = rows.map(([k, v]) =>
+        `<div class="k">${k}</div><div>${v}</div>`).join("");
+      $("activeWarn").textContent = (t.warnings || []).join(" ");
+      $("activeError").textContent = t.error || "";
+
+      const actions = $("activeActions");
+      actions.innerHTML = "";
+      const canCancel = t.status === "connecting";
+      const canStop = ["connecting", "recording"].includes(t.status);
+      if (canStop) {
+        const b = document.createElement("button");
+        b.className = "btn danger"; b.textContent = "Остановить запись и выйти";
+        b.onclick = () => act(t.id, "stop");
+        actions.appendChild(b);
+      }
+      if (canCancel) {
+        const b = document.createElement("button");
+        b.className = "btn secondary"; b.textContent = "Отменить подключение";
+        b.onclick = () => act(t.id, "cancel");
+        actions.appendChild(b);
+      }
+    }
+
+    function renderHistory() {
+      const list = Object.values(tasks).sort((a, b) => b.created_at - a.created_at);
+      const body = $("historyBody");
+      if (!list.length) {
+        body.innerHTML = `<tr><td colspan="6" class="muted">Записей пока нет.</td></tr>`;
+        return;
+      }
+      body.innerHTML = list.map((t) => {
+        let result;
+        if (t.status === "completed" || t.status === "interrupted") {
+          if (t.file_path) {
+            result = `<a class="dl" href="/api/tasks/${t.id}/download">Скачать</a>
+                      <div class="muted" style="font-size:12px">${esc(t.file_path)}</div>`;
+          } else {
+            result = `<span class="muted">файл недоступен</span>`;
+          }
+        } else if (t.status === "failed" || t.status === "cancelled" || t.status === "interrupted") {
+          result = `<span class="muted">${esc(t.error || "—")}</span>`;
+        } else {
+          result = `<span class="muted">в процессе</span>`;
+        }
+        const dur = t.duration_s != null ? t.duration_s : (t.live_duration_s || "—");
+        const size = t.file_size != null ? t.file_size : (t.live_size || "—");
+        return `<tr>
+          <td>${esc(t.name)}</td>
+          <td>${fmtTs(t.created_at)}</td>
+          <td><span class="pill ${t.status}">${STATUS[t.status]}</span></td>
+          <td>${typeof dur === "number" ? fmtDur(dur) : "—"}</td>
+          <td>${typeof size === "number" ? fmtBytes(size) : "—"}</td>
+          <td>${result}</td>
+        </tr>`;
+      }).join("");
+    }
+
+    function setConn(on) {
+      const el = $("conn");
+      el.classList.toggle("on", on);
+      el.lastChild.textContent = on ? " онлайн" : " соединение потеряно";
+    }
+
+    async function act(id, verb) {
+      try {
+        await fetch(`/api/tasks/${id}/${verb}`, { method: "POST" });
+      } catch (e) { /* WS обновит состояние */ }
+    }
+
+    async function startRecording() {
+      const body = {
+        url: $("url").value.trim(),
+        name: $("name").value.trim(),
+        bot_name: $("botName").value.trim(),
+        max_duration_min: parseInt($("maxDur").value, 10) || 180,
+      };
+      $("startError").textContent = "";
+      if (!body.url) { $("startError").textContent = "Введите ссылку на встречу."; return; }
+      try {
+        const r = await fetch("/api/tasks", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!r.ok) {
+          const d = await r.json().catch(() => ({}));
+          $("startError").textContent = d.detail || "Не удалось запустить запись.";
+          return;
+        }
+        const t = await r.json();
+        tasks[t.id] = t;
+        render();
+      } catch (e) {
+        $("startError").textContent = "Ошибка сети.";
+      }
+    }
+
+    function connectWS() {
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      const ws = new WebSocket(`${proto}://${location.host}/ws`);
+      ws.onopen = () => setConn(true);
+      ws.onclose = () => { setConn(false); setTimeout(connectWS, 2000); };
+      ws.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg.type === "task") { tasks[msg.task.id] = msg.task; render(); }
+        } catch (e) {}
+      };
+    }
+
+    $("startBtn").onclick = startRecording;
+    loadDefaults();
+    loadTasks();
+    connectWS();
+    // Периодическая подстраховка: обновляем список, если WS «умолк».
+    setInterval(loadTasks, 15000);
+  </script>
+</body>
+</html>
