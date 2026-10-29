@@ -1,6 +1,8 @@
-"""Оркестрация жизненного цикла задания: подключение, запись, финализация.
+"""Оркестрация жизненного цикла заданий: подключение, запись, финализация.
 
-Держит одно активное задание (MVP), обеспечивает лимиты, проверку места,
+Поддерживает несколько одновременных записей (до max_concurrent_recordings):
+каждому заданию выделяется собственный слот ресурсов — X-дисплей,
+PulseAudio-инстанс и аудио-sink. Обеспечивает лимиты, проверку места,
 переходы состояний (§6), обработку ошибок (§7) и graceful shutdown (§9).
 """
 from __future__ import annotations
@@ -9,6 +11,7 @@ import asyncio
 import json
 import logging
 import time
+from collections import deque
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -44,7 +47,9 @@ class Orchestrator:
         self.storage_dir.mkdir(parents=True, exist_ok=True)
 
         self._tasks: dict[str, Task] = {}
-        self._pipeline: asyncio.Task | None = None
+        self._pipelines: dict[str, asyncio.Task] = {}
+        # Свободные слоты ресурсов (X-дисплей + PulseAudio + sink).
+        self._free_slots: deque[int] = deque(range(cfg.max_concurrent_recordings))
         self._start_lock = asyncio.Lock()
         self._log_handler: logging.Handler | None = None
 
@@ -55,34 +60,53 @@ class Orchestrator:
         name: str,
         bot_name: str,
         max_duration_min: int,
+        start_at: float | None = None,
     ) -> Task:
         async with self._start_lock:
             url = self._validate_url(url)
 
-            active = [t for t in self._tasks.values() if t.is_active]
-            if active:
-                raise StartRejectionError("Другая запись уже активна.")
-
-            if not has_enough_space(self.storage_dir, self.cfg.min_free_space_gb):
+            if not self._free_slots:
                 raise StartRejectionError(
-                    f"Недостаточно места на диске (нужно не менее "
-                    f"{self.cfg.min_free_space_gb:g} ГБ)."
+                    f"Достигнуто максимальное число одновременных записей "
+                    f"({self.cfg.max_concurrent_recordings}). Дождитесь окончания "
+                    f"одной из записей."
                 )
+            slot = self._free_slots.popleft()
+            try:
+                if not has_enough_space(self.storage_dir, self.cfg.min_free_space_gb):
+                    raise StartRejectionError(
+                        f"Недостаточно места на диске (нужно не менее "
+                        f"{self.cfg.min_free_space_gb:g} ГБ)."
+                    )
 
-            if not name or not name.strip():
-                room = room_from_url(url)
-                date = time.strftime("%Y-%m-%d", time.localtime())
-                name = f"{room}_{date}"
+                if not name or not name.strip():
+                    room = room_from_url(url)
+                    date = time.strftime("%Y-%m-%d", time.localtime())
+                    name = f"{room}_{date}"
 
-            task = Task(
-                url=url,
-                name=name.strip(),
-                bot_name=bot_name.strip() or self.cfg.default_bot_name,
-                max_duration_min=max_duration_min,
+                task = Task(
+                    url=url,
+                    name=name.strip(),
+                    bot_name=bot_name.strip() or self.cfg.default_bot_name,
+                    max_duration_min=max_duration_min,
+                    start_at=start_at,
+                )
+                task._slot = slot
+                self._tasks[task.id] = task
+                await self._persist_publish(task)
+            except Exception:
+                # Не успели создать задание — возвращаем слот.
+                self._free_slots.appendleft(slot)
+                raise
+
+            log.info(
+                "Задание %s: выделен слот %d (display=%s, sink=%s)",
+                task.id, slot,
+                self.cfg.display_for_slot(slot), self.cfg.sink_for_slot(slot),
             )
-            self._tasks[task.id] = task
-            await self._persist_publish(task)
-            self._pipeline = asyncio.create_task(self._run(task), name=f"task-{task.id}")
+            self._pipelines[task.id] = asyncio.create_task(
+                self._run(task), name=f"task-{task.id}"
+            )
         return task
 
     def stop(self, task_id: str) -> Task:
@@ -96,9 +120,10 @@ class Orchestrator:
 
     def cancel(self, task_id: str) -> Task:
         task = self._require(task_id)
-        if task.status != TaskStatus.CONNECTING:
+        if task.status not in (TaskStatus.SCHEDULED, TaskStatus.CONNECTING):
             raise StartRejectionError(
-                "Отменить можно только подключение до начала записи."
+                "Отменить можно только запланированную встречу или подключение "
+                "до начала записи."
             )
         task._cancel_requested = True
         log.info("Запрошена отмена подключения задания %s", task.id)
@@ -111,11 +136,12 @@ class Orchestrator:
     def history(self) -> list[Task]:
         return sorted(self._tasks.values(), key=lambda t: t.created_at, reverse=True)
 
-    def active_task(self) -> Task | None:
-        for t in self._tasks.values():
-            if t.is_active:
-                return t
-        return None
+    def active_tasks(self) -> list[Task]:
+        return [t for t in self._tasks.values() if t.is_active]
+
+    @property
+    def free_slots_count(self) -> int:
+        return len(self._free_slots)
 
     # -------------------------------------------------------------- internals
     def _require(self, task_id: str) -> Task:
@@ -142,11 +168,19 @@ class Orchestrator:
         browser: JitsiBrowser | None = None
         page = None
         try:
+            if task.start_at is not None and task.start_at > time.time():
+                if not await self._wait_until(task):
+                    return
+
             task.status = TaskStatus.CONNECTING
             await self._persist_publish(task)
 
-            video = VideoSource(self.cfg.display)
-            audio = AudioSource(self.cfg.pulse_sink, self.cfg.pulse_socket)
+            assert task._slot is not None, "слот не выделен"
+            display = self.cfg.display_for_slot(task._slot)
+            sink = self.cfg.sink_for_slot(task._slot)
+            pulse_socket = self.cfg.pulse_socket_for_slot(task._slot)
+            video = VideoSource(display)
+            audio = AudioSource(sink, pulse_socket)
 
             if not await video.is_available():
                 raise RecorderError("Виртуальный экран недоступен. Запись невозможна.")
@@ -164,6 +198,7 @@ class Orchestrator:
             self._write_metadata(task)
 
             env = audio.env()
+            env["DISPLAY"] = display
             browser = JitsiBrowser(self.cfg, env)
             page = await browser.start()
 
@@ -221,6 +256,40 @@ class Orchestrator:
                     await browser.close()
                 except Exception:  # noqa: BLE001
                     pass
+            self._release_slot(task)
+
+    def _release_slot(self, task: Task) -> None:
+        self._pipelines.pop(task.id, None)
+        if task._slot is not None:
+            self._free_slots.append(task._slot)
+            log.info("Задание %s: слот %d освобождён", task.id, task._slot)
+            task._slot = None
+
+    async def _wait_until(self, task: Task) -> bool:
+        """Ждёт времени начала. False — задание завершено (отмена/стоп)."""
+        assert task.start_at is not None
+        task.status = TaskStatus.SCHEDULED
+        await self._persist_publish(task)
+        log.info(
+            "Задание %s запланировано на %s",
+            task.id,
+            time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(task.start_at)),
+        )
+        while time.time() < task.start_at:
+            if task._cancel_requested:
+                await self._conclude(
+                    task, None, TaskStatus.CANCELLED,
+                    "Запланированная встреча отменена пользователем.",
+                )
+                return False
+            if task._stop_requested:
+                await self._conclude(
+                    task, None, TaskStatus.INTERRUPTED,
+                    "Приложение было остановлено до начала встречи.",
+                )
+                return False
+            await asyncio.sleep(1)
+        return True
 
     async def _record_loop(
         self, task: Task, recorder: Recorder, page
@@ -322,6 +391,9 @@ class Orchestrator:
             "created_at_iso": time.strftime(
                 "%Y-%m-%dT%H:%M:%S", time.localtime(task.created_at)
             ),
+            "start_at_iso": time.strftime(
+                "%Y-%m-%dT%H:%M:%S", time.localtime(task.start_at)
+            ) if task.start_at else None,
         }
         try:
             Path(task.metadata_path).write_text(
@@ -356,13 +428,19 @@ class Orchestrator:
 
     # ------------------------------------------------------------- shutdown
     async def shutdown(self, timeout: float = 30.0) -> None:
-        """Грациозное завершение: доводит активную запись до финализации."""
-        active = self.active_task()
-        if active is None or self._pipeline is None:
+        """Грациозное завершение: доводит все активные записи до финализации."""
+        active = self.active_tasks()
+        if not active:
             return
-        active._stop_requested = True
-        log.info("Shutdown: доводжу активную запись %s до конца", active.id)
+        for task in active:
+            task._stop_requested = True
+        log.info("Shutdown: довожу %d активных записей до конца", len(active))
+        pipelines = [p for p in self._pipelines.values() if not p.done()]
+        if not pipelines:
+            return
         try:
-            await asyncio.wait_for(self._pipeline, timeout=timeout)
+            await asyncio.wait_for(
+                asyncio.gather(*pipelines, return_exceptions=True), timeout=timeout
+            )
         except (asyncio.TimeoutError, Exception):  # noqa: BLE001
             pass

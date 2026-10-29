@@ -1,6 +1,8 @@
 """REST API управления записью."""
 from __future__ import annotations
 
+import time
+
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pathlib import Path
@@ -11,12 +13,17 @@ from app.core.orchestrator import Orchestrator, StartRejectionError
 
 router = APIRouter(prefix="/api")
 
+# Допуск (сек): время начала чуть в прошлом считаем «сейчас».
+_START_AT_PAST_GRACE_S = 10
+
 
 class StartRequest(BaseModel):
     url: str
     name: str | None = None
     bot_name: str = Field(default="Владимир Русин AI")
     max_duration_min: int = Field(default=180, ge=1, le=24 * 60)
+    # Абсолютное время начала (epoch, секунды). None/0 — сразу.
+    start_at: float | None = None
 
 
 def _orch(request: Request) -> Orchestrator:
@@ -34,18 +41,32 @@ async def defaults(request: Request) -> dict:
     return {
         "default_bot_name": cfg.default_bot_name,
         "default_max_duration_min": cfg.default_max_duration_min,
+        "max_concurrent_recordings": cfg.max_concurrent_recordings,
     }
 
 
 @router.post("/tasks", status_code=202)
 async def start_task(request: Request, body: StartRequest) -> dict:
     cfg = request.app.state.cfg
+    start_at: float | None = body.start_at or None
+    if start_at is not None:
+        if start_at <= time.time() - _START_AT_PAST_GRACE_S:
+            raise HTTPException(
+                status_code=400,
+                detail="Время начала уже прошло — бот подключится сразу.",
+            )
+        if start_at > time.time() + 366 * 24 * 3600:
+            raise HTTPException(
+                status_code=400,
+                detail="Время начала слишком далёкое (не более чем через 366 дней).",
+            )
     try:
         task: Task = await _orch(request).start(
             url=body.url,
             name=body.name or "",
             bot_name=body.bot_name or cfg.default_bot_name,
             max_duration_min=body.max_duration_min or cfg.default_max_duration_min,
+            start_at=start_at,
         )
     except StartRejectionError as exc:
         raise HTTPException(status_code=409, detail=str(exc))

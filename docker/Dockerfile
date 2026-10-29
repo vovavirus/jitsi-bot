@@ -33,9 +33,14 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY --chown=1000:1000 app/ /app/app/
 COPY --chown=1000:1000 config.example.yaml /app/config.example.yaml
 COPY --chown=1000:1000 docker/entrypoint.sh /app/entrypoint.sh
+# /run принадлежит root'у, а приложение работает от uid 1000 — каталоги
+# сокетов PulseAudio для слотов (pulse1..pulse8) создаём заранее.
 RUN chmod +x /app/entrypoint.sh \
     && mkdir -p /app/recordings && chown 1000:1000 /app/recordings \
-    && mkdir -p /run/pulse && chown 1000:1000 /run/pulse
+    && mkdir -p /run/pulse /run/pulse1 /run/pulse2 /run/pulse3 \
+    && mkdir -p /run/pulse4 /run/pulse5 /run/pulse6 /run/pulse7 /run/pulse8 \
+    && chown 1000:1000 /run/pulse /run/pulse1 /run/pulse2 /run/pulse3 \
+    && chown 1000:1000 /run/pulse4 /run/pulse5 /run/pulse6 /run/pulse7 /run/pulse8
 
 USER 1000
 EXPOSE 8080

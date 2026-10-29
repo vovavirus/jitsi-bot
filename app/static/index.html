@@ -47,6 +47,7 @@
     }
     .pill.recording { background: rgba(34,197,94,.15); color: var(--ok); }
     .pill.connecting, .pill.created, .pill.finalizing { background: rgba(245,158,11,.15); color: var(--warn); }
+    .pill.scheduled { background: rgba(59,130,246,.15); color: var(--accent); }
     .pill.completed { background: rgba(34,197,94,.15); color: var(--ok); }
     .pill.failed, .pill.interrupted { background: rgba(239,68,68,.15); color: var(--err); }
     .pill.cancelled { background: var(--panel2); color: var(--muted); }
@@ -90,8 +91,20 @@
           <input id="botName" type="text" />
         </div>
       </div>
-      <label for="maxDur">Максимальная длительность (минут)</label>
-      <input id="maxDur" type="number" min="1" max="1440" />
+      <div class="row">
+        <div>
+          <label for="maxDur">Максимальная длительность (минут)</label>
+          <input id="maxDur" type="number" min="1" max="1440" />
+        </div>
+        <div>
+          <label for="startAt">Начало встречи (необязательно)</label>
+          <input id="startAt" type="datetime-local" />
+        </div>
+      </div>
+      <div class="note">
+        Если время не указано — бот подключится сразу. Если указано —
+        подключится и начнёт запись к этому времени.
+      </div>
       <div class="actions">
         <button class="btn" id="startBtn">Подключиться и записывать</button>
       </div>
@@ -99,14 +112,8 @@
       <div class="error" id="startError"></div>
     </div>
 
-    <!-- Активная запись -->
-    <div class="card hidden" id="activeCard">
-      <h2>Активная запись</h2>
-      <div class="kv" id="activeKv"></div>
-      <div class="warn" id="activeWarn"></div>
-      <div class="error" id="activeError"></div>
-      <div class="actions" id="activeActions"></div>
-    </div>
+    <!-- Активные записи (одна карточка на каждую) -->
+    <div id="activeCards"></div>
 
     <!-- История -->
     <div class="card">
@@ -125,13 +132,12 @@
 
   <script>
     const STATUS = {
-      created: "Создано", connecting: "Подключение", recording: "Запись идёт",
-      finalizing: "Финализация", completed: "Выполнено", failed: "Ошибка",
-      cancelled: "Отменено", interrupted: "Прервано"
+      created: "Создано", scheduled: "Запланировано", connecting: "Подключение",
+      recording: "Запись идёт", finalizing: "Финализация", completed: "Выполнено",
+      failed: "Ошибка", cancelled: "Отменено", interrupted: "Прервано"
     };
-    const ACTIVE = new Set(["created", "connecting", "recording", "finalizing"]);
+    const ACTIVE = new Set(["created", "scheduled", "connecting", "recording", "finalizing"]);
     const tasks = {};
-    let activeId = null;
 
     const $ = (id) => document.getElementById(id);
 
@@ -157,11 +163,15 @@
         (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
     }
 
+    let maxConcurrent = 1;
     async function loadDefaults() {
       try {
         const r = await fetch("/api/defaults"); const d = await r.json();
         $("botName").value = d.default_bot_name;
         $("maxDur").value = d.default_max_duration_min;
+        maxConcurrent = d.max_concurrent_recordings || 1;
+        $("formNote").textContent =
+          "Одновременно поддерживается до " + maxConcurrent + " записей.";
       } catch (e) {}
     }
     async function loadTasks() {
@@ -173,57 +183,47 @@
     }
 
     function render() {
-      // Найти активное задание.
-      activeId = null;
-      for (const id in tasks) if (ACTIVE.has(tasks[id].status)) { activeId = id; break; }
-
-      const startCard = $("startCard");
-      const activeCard = $("activeCard");
-
-      if (activeId) {
-        startCard.classList.add("hidden");
-        activeCard.classList.remove("hidden");
-        renderActive(tasks[activeId]);
-      } else {
-        startCard.classList.remove("hidden");
-        activeCard.classList.add("hidden");
-        $("formNote").textContent = "Одновременно поддерживается одна запись.";
-        $("startError").textContent = "";
-      }
+      renderActiveCards();
       renderHistory();
     }
 
-    function renderActive(t) {
+    function renderActiveCards() {
+      const box = $("activeCards");
+      const actives = Object.values(tasks).filter((t) => ACTIVE.has(t.status));
+      box.innerHTML = actives.map(activeCardHtml).join("");
+    }
+
+    function activeCardHtml(t) {
+      const scheduled = t.status === "scheduled";
       const rows = [
         ["Название", esc(t.name)],
         ["Встреча", esc(t.url)],
         ["Состояние", `<span class="pill ${t.status}">${STATUS[t.status]}</span>`],
         ["Имя бота", esc(t.bot_name)],
-        ["Начало", fmtTs(t.started_at)],
-        ["Длительность", fmtDur(t.live_duration_s != null ? t.live_duration_s : t.duration_s)],
-        ["Размер файла", fmtBytes(t.live_size)],
       ];
-      $("activeKv").innerHTML = rows.map(([k, v]) =>
-        `<div class="k">${k}</div><div>${v}</div>`).join("");
-      $("activeWarn").textContent = (t.warnings || []).join(" ");
-      $("activeError").textContent = t.error || "";
-
-      const actions = $("activeActions");
-      actions.innerHTML = "";
-      const canCancel = t.status === "connecting";
-      const canStop = ["connecting", "recording"].includes(t.status);
-      if (canStop) {
-        const b = document.createElement("button");
-        b.className = "btn danger"; b.textContent = "Остановить запись и выйти";
-        b.onclick = () => act(t.id, "stop");
-        actions.appendChild(b);
+      if (scheduled) {
+        rows.push(["Начало в (план)", fmtTs(t.start_at)]);
+      } else {
+        rows.push(["Начало", fmtTs(t.started_at)]);
+        rows.push(["Длительность", fmtDur(t.live_duration_s != null ? t.live_duration_s : t.duration_s)]);
+        rows.push(["Размер файлов", fmtBytes(t.live_size)]);
       }
-      if (canCancel) {
-        const b = document.createElement("button");
-        b.className = "btn secondary"; b.textContent = "Отменить подключение";
-        b.onclick = () => act(t.id, "cancel");
-        actions.appendChild(b);
+      let actions = "";
+      if (["connecting", "recording"].includes(t.status)) {
+        actions += `<button class="btn danger" onclick="act('${t.id}', 'stop')">Остановить запись и выйти</button>`;
       }
+      if (["connecting", "scheduled"].includes(t.status)) {
+        actions += `<button class="btn secondary" onclick="act('${t.id}', 'cancel')">${
+          scheduled ? "Отменить запланированную встречу" : "Отменить подключение"}</button>`;
+      }
+      return `<div class="card">
+        <h2>Активная запись</h2>
+        <div class="kv">${rows.map(([k, v]) =>
+          `<div class="k">${k}</div><div>${v}</div>`).join("")}</div>
+        <div class="warn">${esc((t.warnings || []).join(" "))}</div>
+        <div class="error">${esc(t.error || "")}</div>
+        <div class="actions">${actions}</div>
+      </div>`;
     }
 
     function renderHistory() {
@@ -273,11 +273,24 @@
     }
 
     async function startRecording() {
+      const startVal = $("startAt").value;
+      let start_at = null;
+      if (startVal) {
+        // datetime-local → абсолютное время (epoch, сек) по часовому поясу
+        // браузера — серверу разница поясов безразлична.
+        const d = new Date(startVal);
+        if (isNaN(d.getTime())) {
+          $("startError").textContent = "Некорректное время начала.";
+          return;
+        }
+        start_at = Math.floor(d.getTime() / 1000);
+      }
       const body = {
         url: $("url").value.trim(),
         name: $("name").value.trim(),
         bot_name: $("botName").value.trim(),
         max_duration_min: parseInt($("maxDur").value, 10) || 180,
+        start_at: start_at,
       };
       $("startError").textContent = "";
       if (!body.url) { $("startError").textContent = "Введите ссылку на встречу."; return; }
@@ -314,6 +327,11 @@
     }
 
     $("startBtn").onclick = startRecording;
+    $("startAt").addEventListener("input", () => {
+      $("startBtn").textContent = $("startAt").value
+        ? "Запланировать и записывать"
+        : "Подключиться и записывать";
+    });
     loadDefaults();
     loadTasks();
     connectWS();

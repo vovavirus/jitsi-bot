@@ -36,8 +36,39 @@ class AppConfig:
     pulse_sink: str = "botsink"
     pulse_socket: str = "/run/pulse/native"
     log_level: str = "INFO"
+    # Сколько встреч можно записывать одновременно.
+    # Каждый слот — свой X-дисплей, свой PulseAudio и свой sink.
+    max_concurrent_recordings: int = 3
     video: VideoConfig = field(default_factory=VideoConfig)
     audio: AudioConfig = field(default_factory=AudioConfig)
+
+    # ------------------------------------------------------- слоты ресурсов
+    def _base_display_num(self) -> int:
+        return int(self.display.lstrip(":").split(".")[0] or 99)
+
+    def display_for_slot(self, slot: int) -> str:
+        """X-дисплей слота: :99, :100, :101..."""
+        return f":{self._base_display_num() + slot}"
+
+    def pulse_socket_for_slot(self, slot: int) -> str:
+        """Сокет PulseAudio-инстанса слота.
+
+        Слот 0: /run/pulse/native; слот i: /run/pulse{i}/native.
+        Поддерживается базовый сокет вида <prefix>/pulse/native
+        (как в docker-compose).
+        """
+        if slot == 0:
+            return self.pulse_socket
+        suffix = "/pulse/native"
+        if self.pulse_socket.endswith(suffix):
+            return self.pulse_socket[: -len(suffix)] + f"/pulse{slot}/native"
+        # Нестандартный сокет: кладём инстанс рядом с базовым.
+        parent, _, name = self.pulse_socket.rpartition("/")
+        return f"{parent}/pulse{slot}/{name}"
+
+    def sink_for_slot(self, slot: int) -> str:
+        """Имя null-sink слота: botsink, botsink1, botsink2..."""
+        return self.pulse_sink if slot == 0 else f"{self.pulse_sink}{slot}"
 
     @classmethod
     def load(cls, path: str | os.PathLike | None = None) -> "AppConfig":
@@ -80,6 +111,10 @@ class AppConfig:
             pulse_sink=_env_str("PULSE_SINK", data.get("pulse_sink", cls.pulse_sink)),
             pulse_socket=_env_str("PULSE_SOCKET", data.get("pulse_socket", cls.pulse_socket)),
             log_level=_env_str("LOG_LEVEL", data.get("log_level", cls.log_level)).upper(),
+            max_concurrent_recordings=_env_int(
+                "MAX_CONCURRENT_RECORDINGS",
+                data.get("max_concurrent_recordings", cls.max_concurrent_recordings),
+            ),
             video=video,
             audio=audio,
         )

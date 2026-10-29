@@ -17,6 +17,8 @@ services:
       PULSE_SOCKET: /run/pulse/native
       PULSE_SINK: botsink
       DISPLAY: ":99"
+      # Сколько встреч записывать одновременно (X-дисплеев :99.., PulseAudio).
+      MAX_CONCURRENT_RECORDINGS: "3"
       PORT: "8080"
       LOG_LEVEL: INFO
     restart: unless-stopped

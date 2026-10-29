@@ -19,12 +19,20 @@ class AudioSource:
     def _pactl(self, *args: str) -> list[str]:
         return ["pactl", *args]
 
+    def _pulse_env(self) -> dict[str, str]:
+        """Окружение для pactl/parec: свой инстанс PulseAudio слота."""
+        env = dict(os.environ)
+        env["PULSE_SERVER"] = self._pulse_server
+        env["PULSE_RUNTIME_PATH"] = os.path.dirname(self._pulse_server)
+        return env
+
     async def _run(self, args: list[str]) -> tuple[int, str]:
         try:
             proc = await asyncio.create_subprocess_exec(
                 *args,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
+                env=self._pulse_env(),
             )
         except FileNotFoundError:
             return 1, "pactl: не найден (PulseAudio не установлен)"
@@ -59,10 +67,7 @@ class AudioSource:
 
     def env(self) -> dict[str, str]:
         """Переменные окружения для Chromium, чтобы звук шёл в наш sink."""
-        env = dict(os.environ)
-        env["PULSE_SERVER"] = self._pulse_server
-        env["PULSE_RUNTIME_PATH"] = os.path.dirname(self._pulse_server)
-        return env
+        return self._pulse_env()
 
     @property
     def ffmpeg_input(self) -> str:

@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 
 class TaskStatus(str, enum.Enum):
     CREATED = "created"
+    SCHEDULED = "scheduled"
     CONNECTING = "connecting"
     RECORDING = "recording"
     FINALIZING = "finalizing"
@@ -18,9 +19,10 @@ class TaskStatus(str, enum.Enum):
     INTERRUPTED = "interrupted"
 
 
-#: Состояния, в которых запись активно идёт (нельзя стартовать вторую).
+#: Состояния, в которых задание занято (нельзя стартовать новое).
 ACTIVE_STATUSES = {
     TaskStatus.CREATED,
+    TaskStatus.SCHEDULED,
     TaskStatus.CONNECTING,
     TaskStatus.RECORDING,
     TaskStatus.FINALIZING,
@@ -42,6 +44,8 @@ class Task:
     name: str
     bot_name: str
     max_duration_min: int
+    # Момент начала (epoch). None — подключаться сразу.
+    start_at: float | None = None
 
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     status: TaskStatus = TaskStatus.CREATED
@@ -66,6 +70,8 @@ class Task:
     _stop_requested: bool = field(default=False, repr=False)
     _cancel_requested: bool = field(default=False, repr=False)
     _live_size: int = field(default=0, repr=False)
+    # Слот ресурсов (свой X-дисплей + PulseAudio). None — не выделен.
+    _slot: int | None = field(default=None, repr=False)
 
     @property
     def is_active(self) -> bool:
@@ -86,6 +92,7 @@ class Task:
             "name": self.name,
             "bot_name": self.bot_name,
             "max_duration_min": self.max_duration_min,
+            "start_at": self.start_at,
             "status": self.status.value,
             "created_at": self.created_at,
             "started_at": self.started_at,
@@ -110,6 +117,7 @@ class Task:
             name=row["name"],
             bot_name=row["bot_name"],
             max_duration_min=row["max_duration_min"],
+            start_at=row["start_at"],
             id=row["id"],
             status=TaskStatus(row["status"]),
             created_at=row["created_at"],
